@@ -1,0 +1,587 @@
+# Partie 1 
+# Préparation des données
+## Importation et mise en forme 
+
+# Chargement des bibliothèques 
+library(readxl)
+library(dplyr)
+library(janitor)
+library(gt)
+library(gtsummary)
+library(sf)
+library(leaflet)
+library(raster)
+library(readxl)
+library(ggplot2)
+
+# Lecture du fichier Base_Partie 1 avec la fontion read_excel du package readxl
+# qui va la transformer en data.frame  et assignation à l'objet projet
+
+projet <- readxl::read_excel("Base_Partie 1.xlsx")
+
+# ce code permet de selectionner toutes les variables sauf la variable key dans
+# la base projet avec la fontion select de la bibliothèque dplyr et l'assigne à
+# à l'objet projet_selection
+
+projet_selection <- dplyr::select(projet, -key)
+
+# on calcule le nombre de valeurs manquantes par variable avec la fonction 
+# sapply qui parcourt toutes les lignes ; la fonction is.na permet de verifier 
+# s'il y'a ou pas une valeur manquante et la fontion sum somme le nombre 
+# valeurs manquantes.Enfin on crée un dataframe résumant les valeurs manquantes
+# par variable
+
+vm <- sapply(projet_selection, function(x) sum(is.na(x)))
+tableau<- data.frame(variables= names(vm),Valeurs_manquantes = vm)
+tableau %>%
+  gt() %>%
+  tab_header(title =md("**projet**"),
+             subtitle = md("Le nombre de valeurs manquantes pour chaque variable")) %>%
+  tab_source_note("projet")
+
+
+
+# Utiliser sapply pour vérifier les valeurs manquantes dans la variable 'key'
+resultats_manquants <- sapply(projet$key, function(x) sum(is.na(x)) > 0)
+
+# Obtenir les indices des lignes où les valeurs sont manquantes
+indices_manquants <- data.frame(indices_manquants = which(resultats_manquants))
+
+# Afficher le tableau des indices des lignes avec des valeurs manquantes 
+indices_manquants %>%
+  gt() %>%
+  tab_header(title =md("**projet**"),
+             subtitle = md("indices des lignes avec des valeurs manquantes")) %>%
+  tab_source_note("projet")
+
+
+
+## Creation de variables 
+
+# names(projet) donnes tous les noms des variables et on identifie le nom q1
+# puis le rempace par region et la meme logique est appliquée pour q1 et q23
+
+names(projet)[names(projet) == "q1"] <- "region"
+names(projet)[names(projet) == "q2"] <- "departement"
+names(projet)[names(projet) == "q23"] <- "sexe"
+
+# Dans ce code, ifelse() est utilisé pour évaluer une condition. 
+# Si la condition projet$sexe == "Femme" est vraie, la valeur 1 est assignée à sexe_2,
+#sinon la valeur 0 est assignée.
+
+projet$sexe_2 <- ifelse(projet$sexe == "Femme", 1, 0)
+
+# Le code recherche les variables ayant comme prefice q24a_ et les selectionne 
+# pour former avec ces variables et key le dataframe langues
+
+langues <- projet[, c("key", grep("^q24a_", names(projet), value = TRUE))]
+
+# on somme toutes les variables en ligne de la base langes pour obtenir le 
+# nombre de langue parlée par le dirigeant de la PME.
+
+langues$parle <- rowSums(langues[, -1])
+
+# on selection dans langues les variables key et parle pour generer un
+# dataframe de meme nom
+
+langues <- dplyr::select(langues, key, parle)
+
+# Dans ce code, la fonction merge() est utilisée pour fusionner projet et 
+# langues en utilisant la variable commune key. Le résultat de la fusion 
+# est stocké dans projet_langues.
+
+projet_langues <- merge(projet, langues, by = "key")
+
+
+
+# Analyses descriptives 
+
+
+# la durée entre la date de soumission des informations de la PME et date de 
+# début de l’enrégistrement des informations de la PME par l’enquêteur
+# en heure
+
+projet_langues$duree <- difftime(projet_langues$submissiondate, 
+                                projet_langues$start,units="hours")
+
+#convertir en format numérique
+projet_langues$duree <- as.numeric(projet_langues$duree)
+
+#Conversion de la variable 'filiere_1' en facteur avec des niveaux 
+#personnalisés
+projet_langues$filiere_1<-factor(projet_langues$filiere_1, levels= c(0,1),labels = c("Non","Oui"))
+# Création d'un tableau récapitulatif (summary) avec des statistiques
+#spécifiées
+tab11<-projet_langues%>%tbl_summary(include=c(sexe,q25,q12,q81,q24,parle,duree),
+                                    # Variables à inclure dans le tableau
+                           by=filiere_1,percent = "column",
+                           # Regroupement par la variable 'filiere_1'
+                           label= list(q25 ~ "Niveau d’instruction ",
+                                       q12 ~ "Statut juridique",
+                                       q81 ~ "propriétaire ou locataire",
+                                       q24~ "Age du dirigeant"),
+                           # Étiquette pour les variables
+                           type = list(parle ~ "continuous2",
+                                       duree ~ "continuous2"),
+                           # Type de sommaire pour la variable 'parle'et 'duree'
+                           statistic=list(sexe~"{p}%",
+                                          q25~"{p}%",
+                                          q12~"{p}%",
+                                          q12~"{p}%",
+                                          q81~"{p}%",
+                                          q24~"{median}",
+                                          parle~"{mean}",
+                                          duree~"{max}"),
+                           # Statistique des variables
+                           duree ~ scales::label_number(suffix = " hours")
+                           #afficher l'unité de la variable duree
+                           ) %>% add_n() 
+tab11
+
+#Création d'un tableau récapitulatif stratifié par la variable 'sexe'
+
+tab12 <- projet_langues %>%
+  dplyr::select(sexe, q25, q12, q81,filiere_1) %>%
+  # Variables à inclure dans le tableau
+  tbl_strata(
+    strata = sexe,# Variable utilisée pour stratifier le tableau
+    .tbl_fun = ~ .x %>% # Fonction appliquée à chaque groupe stratifié
+      
+      tbl_summary(by = filiere_1, # Regroupement par la variable 'filiere_1'
+                  missing = "no",# Gestion des valeurs manquantes
+                  label= list(q25 ~ "Niveau d’instruction ",
+                               q12 ~ "Statut juridique",
+                                 q81 ~ "propriétaire ou locataire")) %>%
+      add_n(), # Ajouter le nombre total d'observations pour chaque groupe
+    .combine_with = "tbl_stack", 
+    ## préciser comment combiner les tableaux de chaque groupe. 
+    ##Par défaut, il combine avec "tbl_merge"
+    .header = "*{strata}*",
+    .quiet = TRUE # permet de combiner des tableaux avec des 
+                  # entetes differents
+  ) 
+
+
+tab12  # Afficher le tableau récapitulatif stratifié
+
+# Cette ligne de code fusionnera les tableaux tab11 et tab12 en un
+#seul tableau empilé
+
+tab1 <- gtsummary::tbl_stack(
+  list(tab11, tab12),
+  quiet = TRUE)
+tab1
+
+# on reprend le meme travail avec les filieres 2,3,4 pour tabi {i=2,3,4}
+
+# filiere 2
+
+#Conversion de la variable 'filiere_1' en facteur avec des niveaux 
+#personnalisés
+projet_langues$filiere_2<-factor(projet_langues$filiere_2, levels= c(0,1),labels = c("Non","Oui"))
+# Création d'un tableau récapitulatif (summary) avec des statistiques
+#spécifiées
+tab21<-projet_langues%>%tbl_summary(include=c(sexe,q25,q12,q81,q24,parle,duree),
+                                    # Variables à inclure dans le tableau
+                                    by=filiere_2,percent = "column",
+                                    # Regroupement par la variable 'filiere_2'
+                                    label= list(q25 ~ "Niveau d’instruction ",
+                                                q12 ~ "Statut juridique",
+                                                q81 ~ "propriétaire ou locataire",
+                                                q24~ "Age du dirigeant"),
+                                    # Étiquette pour les variables
+                                    type = list(parle ~ "continuous2",
+                                                duree ~ "continuous2"),
+                                    # Type de sommaire pour la variable 'parle'et'duree'
+                                    statistic=list(sexe~"{p}%",
+                                                   q25~"{p}%",
+                                                   q12~"{p}%",
+                                                   q12~"{p}%",
+                                                   q81~"{p}%",
+                                                   q24~"{median}",
+                                                   parle~"{mean}",
+                                                   duree~"{max}"),
+                                    # Statistique des variables
+                                    duree ~ scales::label_number(suffix = " hours")
+                                    #afficher l'unité de la variable duree)
+                                    # Statistique des variables
+) %>% add_n() 
+tab21
+
+#Création d'un tableau récapitulatif stratifié par la variable 'sexe'
+
+tab22 <- projet_langues %>%
+  dplyr::select(sexe, q25, q12, q81,filiere_2) %>%
+  # Variables à inclure dans le tableau
+  tbl_strata(
+    strata = sexe,# Variable utilisée pour stratifier le tableau
+    .tbl_fun = ~ .x %>% # Fonction appliquée à chaque groupe stratifié
+      
+      tbl_summary(by = filiere_2, # Regroupement par la variable 'filiere_2'
+                  missing = "no",# Gestion des valeurs manquantes
+                  label= list(q25 ~ "Niveau d’instruction ",
+                              q12 ~ "Statut juridique",
+                              q81 ~ "propriétaire ou locataire"))%>%
+      add_n(), # Ajouter le nombre total d'observations pour chaque groupe
+    .combine_with = "tbl_stack", 
+    ## préciser comment combiner les tableaux de chaque groupe. 
+    ##Par défaut, il combine avec "tbl_merge"
+    .header = "*{strata}*",
+    .quiet = TRUE # permet de combiner des tableaux avec des 
+    # entetes differents
+  ) 
+
+
+tab22  # Afficher le tableau récapitulatif stratifié
+
+# Cette ligne de code fusionnera les tableaux tab21 et tab22 en un
+#seul tableau empilé
+
+tab2 <- gtsummary::tbl_stack(
+  list(tab21, tab22),
+  quiet = TRUE)
+tab2
+
+
+# filiere 3
+
+#Conversion de la variable 'filiere_1' en facteur avec des niveaux 
+#personnalisés
+projet_langues$filiere_3<-factor(projet_langues$filiere_3, levels= c(0,1),labels = c("Non","Oui"))
+# Création d'un tableau récapitulatif (summary) avec des statistiques
+#spécifiées
+tab31<-projet_langues%>%tbl_summary(include=c(sexe,q25,q12,q81,q24,parle,duree),
+                                    # Variables à inclure dans le tableau
+                                    by=filiere_3,percent = "column",
+                                    # Regroupement par la variable 'filiere_3'
+                                    label= list(q25 ~ "Niveau d’instruction ",
+                                                q12 ~ "Statut juridique",
+                                                q81 ~ "propriétaire ou locataire",
+                                                q24~ "Age du dirigeant"),
+                                    # Étiquette pour les variables
+                                    type = list(parle ~ "continuous2",
+                                                duree ~ "continuous2"),
+                                    # Type de sommaire pour la variable 'parle'et 'duree'
+                                    statistic=list(sexe~"{p}%",
+                                                   q25~"{p}%",
+                                                   q12~"{p}%",
+                                                   q12~"{p}%",
+                                                   q81~"{p}%",
+                                                   q24~"{median}",
+                                                   parle~"{mean}",
+                                                   duree~"{max}"),
+                                    # Statistique des variables
+                                    duree ~ scales::label_number(suffix = " hours")
+                                    #afficher l'unité de la variable duree)
+                                    # Statistique des variables
+) %>% add_n() 
+tab31
+
+#Création d'un tableau récapitulatif stratifié par la variable 'sexe'
+
+tab32 <- projet_langues %>%
+  dplyr::select(sexe, q25, q12, q81,filiere_3) %>%
+  # Variables à inclure dans le tableau
+  tbl_strata(
+    strata = sexe,# Variable utilisée pour stratifier le tableau
+    .tbl_fun = ~ .x %>% # Fonction appliquée à chaque groupe stratifié
+      
+      tbl_summary(by = filiere_3, # Regroupement par la variable 'filiere_3'
+                  missing = "no",# Gestion des valeurs manquantes
+                  label= list(q25 ~ "Niveau d’instruction ",
+                              q12 ~ "Statut juridique",
+                              q81 ~ "propriétaire ou locataire"))%>%
+      add_n(), # Ajouter le nombre total d'observations pour chaque groupe
+    .combine_with = "tbl_stack", 
+    ## préciser comment combiner les tableaux de chaque groupe. 
+    ##Par défaut, il combine avec "tbl_merge"
+    .header = "*{strata}*",
+    .quiet = TRUE # permet de combiner des tableaux avec des 
+    # entetes differents
+  ) 
+
+
+tab32  # Afficher le tableau récapitulatif stratifié
+
+# Cette ligne de code fusionnera les tableaux tab31 et tab32 en un
+#seul tableau empilé
+
+tab3 <- gtsummary::tbl_stack(
+  list(tab31, tab32),
+  quiet = TRUE)
+tab3
+
+
+# filiere 4
+
+#Conversion de la variable 'filiere_1' en facteur avec des niveaux 
+#personnalisés
+projet_langues$filiere_4<-factor(projet_langues$filiere_4, levels= c(0,1),labels = c("Non","Oui"))
+# Création d'un tableau récapitulatif (summary) avec des statistiques
+#spécifiées
+tab41<-projet_langues%>%tbl_summary(include=c(sexe,q25,q12,q81,q24,parle,duree),
+                                    # Variables à inclure dans le tableau
+                                    by=filiere_4,percent = "column",
+                                    # Regroupement par la variable 'filiere_4'
+                                    label= list(q25 ~ "Niveau d’instruction ",
+                                                q12 ~ "Statut juridique",
+                                                q81 ~ "propriétaire ou locataire",
+                                                q24~ "Age du dirigeant"),
+                                    # Étiquette pour les variables
+                                    type = list(parle ~ "continuous2",
+                                                duree ~ "continuous2"),
+                                    # Type de sommaire pour la variable 'parle'et 'duree'
+                                    statistic=list(sexe~"{p}%",
+                                                   q25~"{p}%",
+                                                   q12~"{p}%",
+                                                   q12~"{p}%",
+                                                   q81~"{p}%",
+                                                   q24~"{median}",
+                                                   parle~"{mean}",
+                                                   duree~"{max}"),
+                                    # Statistique des variables
+                                    duree ~ scales::label_number(suffix = " hours")
+                                    #afficher l'unité de la variable duree)
+                                    # Statistique des variables
+) %>% add_n() 
+tab41
+
+#Création d'un tableau récapitulatif stratifié par la variable 'sexe'
+
+tab42 <- projet_langues %>%
+  dplyr::select(sexe, q25, q12, q81,filiere_4) %>%
+  # Variables à inclure dans le tableau
+  tbl_strata(
+    strata = sexe,# Variable utilisée pour stratifier le tableau
+    .tbl_fun = ~ .x %>% # Fonction appliquée à chaque groupe stratifié
+      
+      tbl_summary(by = filiere_4, # Regroupement par la variable 'filiere_4'
+                  missing = "no",# Gestion des valeurs manquantes
+                  label= list(q25 ~ "Niveau d’instruction ",
+                              q12 ~ "Statut juridique",
+                              q81 ~ "propriétaire ou locataire"))%>%
+      add_n(), # Ajouter le nombre total d'observations pour chaque groupe
+    .combine_with = "tbl_stack", 
+    ## préciser comment combiner les tableaux de chaque groupe. 
+    ##Par défaut, il combine avec "tbl_merge"
+    .header = "*{strata}*",
+    .quiet = TRUE # permet de combiner des tableaux avec des 
+    # entetes differents
+  ) 
+
+
+tab42  # Afficher le tableau récapitulatif stratifié
+
+# Cette ligne de code fusionnera les tableaux tab41 et tab42 en un
+#seul tableau empilé
+
+tab4 <- gtsummary::tbl_stack(
+  list(tab41, tab42),
+  quiet = TRUE)
+tab4
+
+
+# Un peu de cartographie
+
+# Le code copie projet dans un nouvel objet nommé projet_map. Ensuite, 
+#il utilise le package sp pour définir les 
+#coordonnées spatiales de projet_map en utilisant les colonnes gps_menlongitude
+#(longitude) et gps_menlatitude (latitude) du data frame projet.Enfin,
+#il vérifie la classe de l'objet "projet_map" pour déterminerle type d'objet 
+#spatial représenté
+
+projet_map <- st_as_sf(projet, coords = c("gps_menlongitude", "gps_menlatitude"))
+class(projet_map) 
+
+# récupérer les données géospatiales du Sénégal au niveau 0 d'administration
+
+sen_region <- getData("GADM", country = "senegal", level = 1)
+
+
+# Création de la carte interactive avec des marqueurs de différentes couleurs
+# selon le sexe 
+
+m <- leaflet(sen_region) %>%
+  addTiles() %>%
+  addPolygons() %>%
+  addCircleMarkers(
+    data = projet_map,
+    lat = ~st_coordinates(projet_map)[, 2],
+    lng = ~st_coordinates(projet_map)[, 1],
+    color = ~ifelse(sexe == "Femme", "yellow", "red"),  # Changer la couleur en fonction du sexe
+    label = ~departement
+  )%>%
+addLegend(
+    "bottomright",   # Position de la légende (peut être "topright", "topleft", "bottomright", ou "bottomleft")
+    title = "Les PME suivant le sexe",   # Titre de la légende
+    colors = c("yellow", "red"),   # Couleurs des marqueurs
+    labels = c("Femme", "Homme")   # Étiquettes dans la légende
+  )
+
+# Afficher la carte
+m
+
+# niveau d’instruction
+
+# Création de la carte interactive avec des marqueurs de différentes couleurs
+# selon le niveau d'instruction
+m <- leaflet() %>%
+  addTiles() %>%
+  addPolygons(data = sen_region) %>%
+  addCircleMarkers(
+    data = projet_map,
+    lat = ~st_coordinates(projet_map)[, 2],
+    lng = ~st_coordinates(projet_map)[, 1],
+    color = ~ifelse(q25 == "Aucun niveau", "gray",
+                    ifelse(q25 == "Niveau primaire", "blue",
+                           ifelse(q25 == "Niveau secondaire", "orange", "green"))),
+    label = ~departement
+  ) %>%
+  addLegend(
+    "bottomright",   # Position de la légende 
+    title = "Les PME suivant le niveau d'instruction",  # Titre de la légende
+    colors = c("gray", "blue", "orange", "green"),   # Couleurs des marqueurs
+    labels = c("Aucun niveau", "Niveau primaire", "Niveau secondaire", "Niveau Supérieur")   # Étiquettes dans la légende
+  )
+
+
+# Afficher la carte
+m
+
+# Analyse des cartes 
+
+
+
+#Partie 2
+#Nettoyage et gestion des données
+
+# importation de la base 
+Base_Partie_2 <- readxl::read_excel("Base_Partie 2.xlsx")
+# renommer country_destination” en “destination
+names(Base_Partie_2)[names(Base_Partie_2) == "country_destination"] <- "destination"
+## Définir les valeurs négatives de la colonne "destination" comme manquantes (NA)
+Base_Partie_2$destination[Base_Partie_2$destination < 0] <- NA
+
+# Créer une nouvelle variable "tranche_age" avec des tranches d'âge de 5 ans (sous forme de texte)
+Base_Partie_2$tranche_age <- cut(Base_Partie_2$age, 
+                                    breaks = seq(0, max(Base_Partie_2$age) + 5, 
+                                  by = 5), labels = FALSE, include.lowest = TRUE)
+
+# Convertir les identifiants numériques des tranches d'âge en intervalles 
+#de 5 ans sous forme de texte
+Base_Partie_2$tranche_age_texte <- ifelse(is.na(Base_Partie_2$tranche_age),
+                          "N/A", # Si l'âge est manquant, afficher "N/A"
+                          paste0(Base_Partie_2$tranche_age * 5, "-",
+                                 (Base_Partie_2$tranche_age * 5) + 4, " ans"))
+
+# Dans ce code, nous utilisons la fonction group_by() du package "dplyr" pour 
+#regrouper les données par le numéro d'identification de l'enquêteur. 
+#Ensuite, nous utilisons la fonction mutate() pour ajouter une nouvelle variable 
+#"nombre_entretiens", qui contient le nombre d'entretiens réalisés
+#par chaque enquêteur, calculé en utilisant la fonction n() qui renvoie 
+#le nombre de lignes dans chaque groupe
+
+Base_Partie_2 <- Base_Partie_2 %>%
+  group_by(enumerator) %>%
+  mutate(nombre_entretiens = n())
+
+
+# Fixer une graine (seed) pour la génération aléatoire, pour obtenir des résultats
+#reproductibles
+set.seed(133)
+# Créer une nouvelle variable "groupe_traitement" pour affecter aléatoirement 
+#les répondants à un groupe de traitement (1) ou de contrôle (0)
+Base_Partie_2 <- Base_Partie_2 %>%
+  group_by(id) %>%
+  mutate(groupe_traitement = sample(c(0, 1), size = 1))
+
+# Le code  est utilisé pour lire les données de la feuille "district" à partir 
+#d'un fichier Excel ("Base_Partie 2.xlsx") et ensuite fusionner 
+#ces données avec un dataframe existant "Base_Partie_2" en utilisant la variable
+#"district" comme clé de jointure
+donnees_feuille_2 <- read_excel("Base_Partie 2.xlsx", sheet = "district")
+Base_Partie_2  <- merge(Base_Partie_2, donnees_feuille_2, by = "district", all.x = TRUE)
+
+# Calculer la durée de l'entretien en heures 
+Base_Partie_2 <- Base_Partie_2 %>%
+  mutate(duree_entretien = as.numeric(endtime - starttime, units = "hours"))
+
+# Calculer la durée moyenne de l'enquête par enquêteur
+
+Base_Partie_2 <- Base_Partie_2 %>%
+  group_by(enumerator) %>%
+  mutate(duree_moy_enq = mean(duree_entretien, na.rm = TRUE))
+
+# Récupérer les noms des colonnes de l'ensemble de données
+colonne <- names(Base_Partie_2)
+
+# Boucle pour renommer les colonnes avec le préfixe "endline_"
+for (col in colonne) {
+  newcolonne <- paste("endline_", col, sep = "")
+  colnames(Base_Partie_2)[colnames(Base_Partie_2) == col] <- newcolonne
+}
+
+
+#Analyse et visualisation des données
+# tableau contenant l’âge moyen et le nombre moyen d’enfants par district
+tabl<-Base_Partie_2%>%tbl_summary(include=c(endline_age,endline_children_num,
+                                            endline_district),
+                                    # Variables à inclure dans le tableau
+                                    by=endline_district,percent = "column",
+                                    # Regroupement par la variable 'endline_district'
+                                  type = list(endline_children_num = "continuous"),
+                                    statistic=list(endline_age~"{mean}",
+                                                   endline_children_num~"{sum}"),
+                                    # Statistique des variables
+                            
+) %>% add_n() 
+tabl
+
+# test de Student 
+test <- t.test(Base_Partie_2$endline_age, Base_Partie_2$endline_sex)
+print(test)
+#il y a une différence statistiquement significative entre les âges pour les deux
+#sexes car p-value < 5%
+
+# Créez le nuage de points avec ggplot
+ggplot(Base_Partie_2, aes(x = endline_children_num, y = endline_age)) +
+geom_point(size = 3, color = "blue") +    
+  # Définir la taille et la couleur des points+
+  labs(x = "Nombre d'enfants", y = "Âge") + 
+  ggtitle("Nuage de points de l'âge en fonction du nombre d'enfants")
+
+
+
+# Création du modèle de régression linéaire
+model <- lm(endline_intention ~ endline_groupe_traitement, data = Base_Partie_2)
+# Affichage des résultats de la régression linéaire
+summary(model)
+#tableau
+tbl_regression(model)
+
+# les résultats de la régression linéaire suggèrent qu'il n'y a pas de preuve 
+#statistiquement significative d'un effet de l'appartenance au groupe de traitement
+#sur l'intention de migrer (p-value> 5%)
+
+#tableau de régression avec 3 modèles
+# Modèle A : Modèle vide - Effet du traitement sur les intentions
+model_A <- lm(endline_intention ~ endline_groupe_traitement, data = Base_Partie_2)
+
+# Modèle B : Effet du traitement sur les intentions en tenant compte de l'âge et du sexe
+model_B <- lm(endline_intention ~ endline_groupe_traitement + endline_age + endline_sex, data = Base_Partie_2)
+
+# Modèle C : Identique au modèle B mais en contrôlant le district
+model_C <- lm(endline_intention ~ endline_groupe_traitement + endline_age + endline_sex + endline_district, data = Base_Partie_2)
+
+# Créez un objet tbl_regression pour chaque modèle
+tbl_model_A <- tbl_regression(model_A)
+tbl_model_B <- tbl_regression(model_B)
+tbl_model_C <- tbl_regression(model_C)
+
+# Combiner les trois tableaux dans un seul tableau en utilisant la fonction tbl_merge
+table_combine <- tbl_merge(list(tbl_model_A, tbl_model_B, tbl_model_C),
+                           tab_spanner = c("model_A", "model_B","model_C"))
+
+# Afficher le tableau combiné
+table_combine
+
